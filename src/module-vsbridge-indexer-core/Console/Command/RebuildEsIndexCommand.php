@@ -9,9 +9,6 @@
 namespace Divante\VsbridgeIndexerCore\Console\Command;
 
 use Divante\VsbridgeIndexerCore\Indexer\StoreManager;
-use Divante\VsbridgeIndexerCore\Api\IndexOperationInterface;
-use Divante\VsbridgeIndexerCore\Api\Index\IndexOperationProviderInterface;
-use Divante\VsbridgeIndexerCore\Model\IndexerRegistry;
 use Magento\Framework\App\ObjectManagerFactory;
 use Magento\Framework\Console\Cli;
 use Magento\Framework\Event\ManagerInterface;
@@ -33,13 +30,6 @@ class RebuildEsIndexCommand extends AbstractIndexerCommand
 
     const INPUT_ALL_STORES = 'all';
 
-    const INDEX_IDENTIFIER = 'vue_storefront_catalog';
-
-    /**
-     * @var IndexOperationInterface
-     */
-    private $indexOperations;
-
     /**
      * @var StoreManager
      */
@@ -49,11 +39,6 @@ class RebuildEsIndexCommand extends AbstractIndexerCommand
      * @var StoreManagerInterface
      */
     private $storeManager;
-
-    /**
-     * @var IndexerRegistry
-     */
-    private $indexerRegistry;
 
     /**
      * @var array
@@ -116,15 +101,6 @@ class RebuildEsIndexCommand extends AbstractIndexerCommand
         $output->setDecorated(true);
         $storeId = $input->getOption(self::INPUT_STORE);
         $allStores = $input->getOption(self::INPUT_ALL_STORES);
-
-        $invalidIndices = $this->getInvalidIndices();
-
-        if (!empty($invalidIndices)) {
-            $message = 'Some indices has invalid status: '. implode(', ', $invalidIndices) . '. ';
-            $message .= 'Please change indices status to VALID manually.';
-            $output->writeln("<info>WARNING: Indexation can't be executed. $message</info>");
-            return;
-        }
 
         if (!$storeId && !$allStores) {
             $output->writeln(
@@ -233,15 +209,17 @@ class RebuildEsIndexCommand extends AbstractIndexerCommand
      */
     private function reindexStore(StoreInterface $store, OutputInterface $output)
     {
-        $indexOperations = $this->getIndexOperationProvider()->getOperationByStore($store->getId());
-
         $this->getIndexerStoreManager()->override([$store]);
-        $index = $indexOperations->createIndex(self::INDEX_IDENTIFIER, $store);
-        $this->getIndexerRegistry()->setFullReIndexationIsInProgress();
 
         $returnValue = Cli::RETURN_FAILURE;
 
         foreach ($this->getIndexers() as $indexer) {
+            if ($indexer->isWorking()) {
+                $message = $indexer->getTitle() . ' can\'t be executed. Change indexer status manually to VALID.';
+                $output->writeln("<info>WARNING: $message");
+                continue;
+            }
+
             try {
                 $startTime = microtime(true);
                 $indexer->reindexAll();
@@ -258,12 +236,6 @@ class RebuildEsIndexCommand extends AbstractIndexerCommand
                 $output->writeln("<error>" . $e->getMessage() . "</error>");
             }
         }
-
-        $indexOperations->switchIndexer($index->getName(), $index->getIdentifier());
-
-        $output->writeln(
-            sprintf('<info>Index name: %s, index alias: %s</info>', $index->getName(), $index->getIdentifier())
-        );
 
         return $returnValue;
     }
@@ -319,30 +291,6 @@ class RebuildEsIndexCommand extends AbstractIndexerCommand
         }
 
         return $this->indexerStoreManager;
-    }
-
-    /**
-     * @return IndexerRegistry
-     */
-    private function getIndexerRegistry()
-    {
-        if (null === $this->indexerRegistry) {
-            $this->indexerRegistry = $this->getObjectManager()->get(IndexerRegistry::class);
-        }
-
-        return $this->indexerRegistry;
-    }
-
-    /**
-     * @return IndexOperationProviderInterface
-     */
-    private function getIndexOperationProvider()
-    {
-        if (null === $this->indexOperations) {
-            $this->indexOperations = $this->getObjectManager()->get(IndexOperationProviderInterface::class);
-        }
-
-        return $this->indexOperations;
     }
 
     /**
